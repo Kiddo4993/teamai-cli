@@ -20,7 +20,7 @@ vi.mock('../utils/teamwiki-root.js', () => ({
 
 vi.mock('../utils/git.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../utils/git.js')>(),
-  autoPushTeamRepo: vi.fn(async () => { state.events.push('push'); }),
+  pushRepoDirectly: vi.fn(async () => { state.events.push('push'); }),
 }));
 
 vi.mock('../deep-enrich.js', () => ({
@@ -31,7 +31,8 @@ vi.mock('../deep-enrich.js', () => ({
 }));
 
 import { codebaseCmd } from '../codebase-cmd.js';
-import { autoPushTeamRepo } from '../utils/git.js';
+import { pushRepoDirectly } from '../utils/git.js';
+import { log } from '../utils/logger.js';
 
 function createTeamwiki(root: string, project = 'svc'): void {
   const evidenceDir = path.join(root, 'teamwiki', 'evidence', 'code', project);
@@ -48,7 +49,7 @@ beforeEach(() => {
 afterEach(() => {
   process.exitCode = undefined;
   vi.restoreAllMocks();
-  vi.mocked(autoPushTeamRepo).mockClear();
+  vi.mocked(pushRepoDirectly).mockClear();
   fs.rmSync(state.repoPath, { recursive: true, force: true });
 });
 
@@ -59,8 +60,21 @@ describe('codebase --deep-enrich publishing (#1537)', () => {
     await codebaseCmd({ deepEnrich: true, project: 'svc' });
 
     expect(process.exitCode).toBeUndefined();
-    expect(autoPushTeamRepo).toHaveBeenCalledWith(state.repoPath, '[teamai] Deep enrich: svc');
+    expect(pushRepoDirectly).toHaveBeenCalledWith(state.repoPath, '[teamai] Deep enrich: svc', ['.']);
     expect(state.events).toEqual(['lock', 'enrich', 'push', 'release']);
+  });
+
+  it('reports a failed publish as an error and exits 1', async () => {
+    createTeamwiki(state.repoPath);
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => undefined);
+    vi.mocked(pushRepoDirectly).mockRejectedValueOnce(new Error('rejected: non-fast-forward'));
+
+    await codebaseCmd({ deepEnrich: true, project: 'svc' });
+
+    expect(process.exitCode).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('rejected: non-fast-forward'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('teamai pull'));
+    expect(state.events).toEqual(['lock', 'enrich', 'release']);
   });
 
   it('publishes nothing for an --output teamwiki', async () => {
@@ -68,7 +82,7 @@ describe('codebase --deep-enrich publishing (#1537)', () => {
 
     await codebaseCmd({ deepEnrich: true, project: 'svc', output: state.repoPath });
 
-    expect(autoPushTeamRepo).not.toHaveBeenCalled();
+    expect(pushRepoDirectly).not.toHaveBeenCalled();
     expect(state.events).toEqual(['lock', 'enrich', 'release']);
   });
 
@@ -77,7 +91,7 @@ describe('codebase --deep-enrich publishing (#1537)', () => {
 
     await codebaseCmd({ deepEnrich: true, project: 'svc', dryRun: true });
 
-    expect(autoPushTeamRepo).not.toHaveBeenCalled();
+    expect(pushRepoDirectly).not.toHaveBeenCalled();
     expect(state.events).toEqual([]);
   });
 });

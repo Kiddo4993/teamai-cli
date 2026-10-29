@@ -148,13 +148,18 @@ export async function codebaseCmd(opts: CodebaseCmdOptions): Promise<void> {
         const { lockTeamwiki } = await import('./utils/teamwiki-root.js');
         const releaseLock = await lockTeamwiki(target);
         let result: Awaited<ReturnType<typeof deepEnrich>>;
+        let publishError: unknown;
         try {
             result = await deepEnrich({ project, evidenceDir, wikiRoot: teamwikiDir });
             // In the team repo, publish what was written as `teamai import` does,
-            // so the clone is not left dirty.
+            // so the clone is not left dirty. A failed push must not pass as success.
             if (target.team) {
-                const { autoPushTeamRepo } = await import('./utils/git.js');
-                await autoPushTeamRepo(target.team.localConfig.repo.localPath, `[teamai] Deep enrich: ${project}`);
+                const { pushRepoDirectly } = await import('./utils/git.js');
+                try {
+                    await pushRepoDirectly(target.team.localConfig.repo.localPath, `[teamai] Deep enrich: ${project}`, ['.']);
+                } catch (error) {
+                    publishError = error;
+                }
             }
         } finally {
             await releaseLock();
@@ -178,6 +183,11 @@ export async function codebaseCmd(opts: CodebaseCmdOptions): Promise<void> {
             console.log(`Deep enrichment incomplete: project=${project}, ${parts.join(', ')}`);
         }
         if (!result.complete) process.exitCode = 1;
+        if (publishError !== undefined) {
+            log.error(`Failed to publish deep enrichment to the team repo: ${(publishError as Error).message}`);
+            log.error('Run `teamai pull`, then rerun this command.');
+            process.exitCode = 1;
+        }
         return;
     }
 
